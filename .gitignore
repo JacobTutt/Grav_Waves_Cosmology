@@ -1,1 +1,8 @@
+# Excluse the Virtual Environment directory
 GW_Venvs
+
+# macOS system files
+.DS_Store
+
+# Python cache
+__pycache__/ 
