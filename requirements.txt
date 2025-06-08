@@ -1,0 +1,12 @@
+numpy
+matplotlib
+scipy
+bilby
+lalsuite
+pandas
+tqdm
+healpy
+dynesty
+corner
+jupyter
+ipykernel
