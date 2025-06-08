@@ -9,9 +9,12 @@ import matplotlib.gridspec as gridspec
 from matplotlib.patches import Rectangle
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-from dynesty import NestedSampler
 from dynesty import plotting as dyplot
 from dynesty.utils import resample_equal
+from matplotlib.ticker import MaxNLocator
+import matplotlib.ticker as ticker
+
+
 
 import warnings
 warnings.filterwarnings("ignore", "Wswiglal-redir-stdio")
@@ -235,8 +238,8 @@ def plot_posterior_skymap_samples(dynesty_results, ra_range = [101, 160], dec_ra
     axins.scatter(ra_deg, dec_deg, s=2, alpha=0.03, color=colors[0])
     axins.set_xlim(ra_min, ra_max) 
     axins.set_ylim(dec_min, dec_max)
-    axins.set_xlabel("Right Ascension", fontsize=12, labelpad=1)   
-    axins.set_ylabel("Declination", fontsize=12, labelpad=1)   
+    axins.set_xlabel("Right Ascension", fontsize=12, fontweight='bold', labelpad=1)   
+    axins.set_ylabel("Declination", fontsize=12, fontweight='bold', labelpad=1)
     axins.tick_params(labelsize=12, pad=2)
 
     # KDE-based contours over the zoom region
@@ -387,7 +390,7 @@ def compare_ra_dec(dynesty_results_1, dynesty_results_2, colors=['red', 'blue'],
     ra2, dec2 = get_deg_samples(dynesty_results_2)
 
     # Setup the figure and gridspec layout
-    fig = plt.figure(figsize=(6, 4))
+    fig = plt.figure(figsize=(7, 5))
     gs = gridspec.GridSpec(2, 2, width_ratios=[4, 1], height_ratios=[1, 4], wspace=0.00, hspace=0.00)
 
     ax_joint = fig.add_subplot(gs[1, 0])
@@ -492,7 +495,7 @@ def plot_luminosity_distance_marginal(dynesty_results_1, dynesty_results_2, colo
     d1 = get_d_l_samples(dynesty_results_1)
     d2 = get_d_l_samples(dynesty_results_2)
 
-    fig, ax = plt.subplots(figsize=(5, 3))
+    fig, ax = plt.subplots(figsize=(6, 4))
 
     for d_l, color, label in zip([d1, d2], colors, labels):
         # KDE for D_L
@@ -519,5 +522,100 @@ def plot_luminosity_distance_marginal(dynesty_results_1, dynesty_results_2, colo
     ax.legend(loc='upper left', frameon=True)
     ax.tick_params(direction='in')
 
+    plt.tight_layout()
+    plt.show()
+
+
+def convergence_dynesty(results_1, results_2, legend = ["H1 and L1", "H1, L1 and V1"]):
+    """
+    Plot a trace comparison of two Dynesty nested sampling results to assess convergence.
+
+    Parameters
+    ----------
+    results_1 : dynesty.results.Results
+        The first nested sampling result object (typically with fewer detectors).
+    results_2 : dynesty.results.Results
+        The second nested sampling result object (typically with more detectors).
+    legend : list of str, optional
+        Labels to use in the legend for each dataset, by default ["H1 and L1", "H1, L1 and V1"].
+
+    Notes
+    -----
+    This function overlays trace plots of the posterior samples and log-evidence evolution
+    from two Dynesty runs. It highlights medians and 68% credible intervals for each parameter,
+    and sets log scaling on the distance axis for clearer visualization.
+    """
+    # Using dynesty's traceplot to visualize the convergence of the two results - the broader one should be placed first
+    fig, axes = dyplot.traceplot(
+        results_1,
+        quantiles=None,
+        show_titles=False,
+        post_color = 'red',
+        trace_cmap='hot',
+        labels=[r"$\mathrm{RA}$", r"$\mathrm{Dec}$", r"$\psi$", r"$t_c^{\mathrm{(geo)}}$", r"$D_L$"],
+    )
+
+    # Add the second set of results to the same figure
+    fig, axes = dyplot.traceplot(
+        results_2,
+        quantiles=None,
+        show_titles=False,
+        trace_cmap='winter',
+        labels=[r"$\mathrm{RA}$", r"$\mathrm{Dec}$", r"$\psi$", r"$t_c^{\mathrm{(geo)}}$", r"$D_L$"],
+        fig =(fig, axes),
+    )
+
+    # Set the Luminosity distance axes to log scale
+    axes[4][0].set_yscale('log')
+    axes[4][1].set_xscale('log')
+
+    # Set the x-axis limits for the axes
+    samples_1 = results_1.samples
+    samples_2 = results_2.samples
+    samples_1_weights = results_1.importance_weights()
+    samples_1_weights /= np.sum(samples_1_weights)
+    samples_2_weights = results_2.importance_weights()
+    samples_2_weights /= np.sum(samples_2_weights)
+    equal_weight_samples_1 = resample_equal(samples_1, samples_1_weights)
+    equal_weight_samples_2 = resample_equal(samples_2, samples_2_weights)
+
+    # Find rhe median of the samples for each parameter
+    median_samples_1 = np.median(equal_weight_samples_1, axis=0)
+    median_samples_2 = np.median(equal_weight_samples_2, axis=0)
+    # Find the 16th and 84th percentiles for each parameter
+    lower_samples_1 = np.percentile(equal_weight_samples_1, 16, axis=0)
+    upper_samples_1 = np.percentile(equal_weight_samples_1, 84, axis=0)
+    lower_samples_2 = np.percentile(equal_weight_samples_2, 16, axis=0)
+    upper_samples_2 = np.percentile(equal_weight_samples_2, 84, axis=0)
+
+
+    for i in range(5):
+        # 10th percentile of both datasets
+        min_val = min(np.percentile(equal_weight_samples_1[:, i], 10), np.percentile(equal_weight_samples_2[:, i], 10))
+        # 90th percentile of both datasets
+        max_val = max(np.percentile(equal_weight_samples_1[:, i], 90), np.percentile(equal_weight_samples_2[:, i], 90))
+        # Set the x-axis limits for both axes and autoscale y-axis
+        axes[i][1].set_xlim(min_val, max_val)
+        axes[i][1].autoscale(enable=True, axis='y')
+        # Plot the median (solid) and 16th and 84th (dashed) percentiles as vertical lines
+        axes[i][1].axvline(median_samples_1[i], color='red', linestyle='-', linewidth=2)
+        axes[i][1].axvline(median_samples_2[i], color='blue', linestyle='-', linewidth=2)
+        axes[i][1].axvline(lower_samples_1[i], color='red', linestyle='--', linewidth=2)
+        axes[i][1].axvline(upper_samples_1[i], color='red', linestyle='--', linewidth=2)
+        axes[i][1].axvline(lower_samples_2[i], color='blue', linestyle='--', linewidth=2)
+        axes[i][1].axvline(upper_samples_2[i], color='blue', linestyle='--', linewidth=2)
+
+
+    # Add legends to each axis
+    for i in range(5):
+        axes[i][0].legend([legend[0], legend[1]], loc='upper right', fontsize=8)
+        axes[i][1].legend([legend[0],  legend[1]], loc='upper right', fontsize=8)
+
+    # Help formatting of the luminosity distance axes
+    axes[4][1].get_xaxis().set_major_formatter(ticker.ScalarFormatter())
+    axes[4][1].get_xaxis().set_minor_formatter(ticker.ScalarFormatter())
+    axes[4][1].ticklabel_format(style='plain', axis='x')
+
+    fig.subplots_adjust(hspace=0.1, wspace=0.1)
     plt.tight_layout()
     plt.show()

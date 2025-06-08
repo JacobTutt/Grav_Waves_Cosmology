@@ -101,6 +101,7 @@ def optimise_matched_filter(detector, detector_strain, detector_psd, waveform, s
     best_params = None
     best_time = 0
     all_times = []
+    all_snr = []
 
     # Iterate over all combinations of RA, Dec, and Psi
     for ra in ra_vals:
@@ -129,15 +130,16 @@ def optimise_matched_filter(detector, detector_strain, detector_psd, waveform, s
                 rho_sq_t = 4 * np.fft.irfft(matched_filter) * sampling_frequency
 
                 # Determine the maximium SNR achieved using the matched filter
-                snr = np.max(np.abs(rho_sq_t))
+                snr = np.max(np.sqrt(np.abs(rho_sq_t)))
 
-                snr_index = np.argmax(np.abs(rho_sq_t))
+                snr_index = np.argmax(np.sqrt(np.abs(rho_sq_t)))
 
                 # Time corresponding to the maximum SNR
                 time_at_max_snr = plot_times[snr_index]
 
                 # Store the time at which the maximum SNR occurs
                 all_times.append(time_at_max_snr)
+                all_snr.append(snr)
 
                 # If this SNR is greater than the current maximum, update the maximum and best parameters
                 if snr > max_snr:
@@ -148,10 +150,12 @@ def optimise_matched_filter(detector, detector_strain, detector_psd, waveform, s
 
 
     # Print the results
-    print(f"Maximum Rho^2 found for Dector {detector}: {max_snr} occured at time {best_time:.3f} seconds from GPS start time {gps_start_time}.")
+    print(f"Maximum SNR found for Dector {detector}: {max_snr} occured at time {best_time:.3f} seconds from GPS start time {gps_start_time}.")
     print(f"Best parameters for Dector {detector}: RA = {best_params['ra']:.3f}, Dec = {best_params['dec']:.3f}, Psi = {best_params['psi']:.3f}")
     # Print the range of times at which the maximum SNR occurs
+    print(f"The standard deviation of the SNR values is {np.std(all_snr):.3f}.")
     print(f"The standard deviation of the times at which the maximum SNR occurs is {np.std(all_times):.3f} seconds.")
+    print()
 
     return max_snr, best_params
 
