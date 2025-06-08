@@ -16,6 +16,12 @@ import matplotlib.ticker as ticker
 
 
 
+from scipy.stats import norm
+import healpy as hp
+
+
+
+
 import warnings
 warnings.filterwarnings("ignore", "Wswiglal-redir-stdio")
 
@@ -58,13 +64,18 @@ def table_dynesty_posteriors(dynesty_results, shift_psi=False):
         - Median
         - 68%, 90%, 95%, 99% CI
     """
-    # Define parameter labels for this specific analysis
-    param_labels = [r"$\mathrm{RA}$", r"$\mathrm{Dec}$", r"$\psi$", r"$t_c^{\mathrm{(geo)}}$", r"$D_L$"]
 
     # Extract samples and weights from the Dynesty results
+    ndim = dynesty_results.samples.shape[1]
     samples = dynesty_results.samples.copy()
     weights = dynesty_results.importance_weights()
     weights /= np.sum(weights)
+
+    # Define parameter labels for this specific analysis
+    if ndim == 5:
+        param_labels = [r"$\mathrm{RA}$", r"$\mathrm{Dec}$", r"$\psi$", r"$t_c^{\mathrm{(geo)}}$", r"$D_L$"]
+    elif ndim == 3:
+        param_labels = [r"$\psi$", r"$t_c^{\mathrm{(geo)}}$", r"$D_L$"]
 
     # Enable a shift in psi if it has hit the edge of the range which can effect the statistics
     if shift_psi:
@@ -203,7 +214,7 @@ def plot_posterior_skymap_samples(dynesty_results, ra_range = [101, 160], dec_ra
         delta_chi2 = np.roll(delta_chi2, shift=RA_back.shape[1] // 2, axis=1)
         # Confidence levels (Wilks’ theorem, 2 DOF)
         levels = [0.0, 2.30, 6.17, 11.8]
-        colors_back = ['#f2f2f2', '#e0e0e0', '#cccccc', 'white'] 
+        colors_back = ['#cccccc', '#e0e0e0', '#f2f2f2', 'white'] 
         # Plot filled contours
         cf = ax.contourf(RA_shifted_back, DEC_back, delta_chi2, levels=levels, colors=colors_back, extend='max', zorder=0)
 
@@ -280,15 +291,22 @@ def plot_corner_dynesty(dynesty_results, title = 'Posterior Samples: H1 and L1',
         The results object from Dynesty containing samples and weights.
     """
     # Get samples and weights from Dynesty results
+    ndim = dynesty_results.samples.shape[1]
     samples = dynesty_results.samples
     weights = dynesty_results.importance_weights()
     weights /= np.sum(weights)
 
     if shift_psi:
         # Shift psi to be in the range [pi/2, 3pi/2] from [0, pi]
-        psi = samples[:, 2]
+        if ndim == 5:
+            index = 2
+        if ndim == 3:
+            index = 1
+        
+        psi = samples[:, index]
         psi_wrapped = np.where(psi < np.pi / 2, psi + np.pi, psi)
-        samples[:, 2] = psi_wrapped
+        samples[:, index] = psi_wrapped
+
         
     # Resample for equal-weight posterior
     equal_weight_samples = resample_equal(samples, weights)
@@ -297,12 +315,15 @@ def plot_corner_dynesty(dynesty_results, title = 'Posterior Samples: H1 and L1',
     medians = np.median(equal_weight_samples, axis=0)
     lower_bounds = np.percentile(equal_weight_samples, 16, axis=0)
     upper_bounds = np.percentile(equal_weight_samples, 84, axis=0)
+    
 
     # Define nicely formatted labels
-    labels = [r"$\mathrm{RA}$", r"$\mathrm{Dec}$", r"$\psi$", r"$t_c^{\mathrm{(geo)}}$", r"$D_L$"]
+    if ndim == 5:
+        labels = [r"$\mathrm{RA}$", r"$\mathrm{Dec}$", r"$\psi$", r"$t_c^{\mathrm{(geo)}}$", r"$D_L$"]
+    if ndim == 3:
+        labels = [r"$\psi$", r"$t_c^{\mathrm{(geo)}}$", r"$D_L$"]
 
     # Set up the Axes for the corner plot
-    ndim = equal_weight_samples.shape[1]
     fig, axes = plt.subplots(ndim, ndim, figsize=(ndim * 2, ndim * 2), squeeze=False)
 
     # Use Corner package to create the corner plot
@@ -617,5 +638,172 @@ def convergence_dynesty(results_1, results_2, legend = ["H1 and L1", "H1, L1 and
     axes[4][1].ticklabel_format(style='plain', axis='x')
 
     fig.subplots_adjust(hspace=0.1, wspace=0.1)
+    plt.tight_layout()
+    plt.show()
+
+def posterior_to_sky_area(results, sigma_levels=[1,2,3], title = 'Posterior from H1 and L1', grid_size=100):
+    """
+    Compute the sky area covered by confidence contours from posterior samples using 2D KDE and HEALPix pixelisation.
+
+    Parameters
+    ----------
+    results : dynesty.results.Results
+        Dynesty result object containing posterior samples and associated importance weights.
+
+    sigma_levels : list of int, optional
+        List of sigma levels (e.g., [1, 2, 3]) for which to compute confidence contours and sky areas.
+        These are converted to corresponding confidence levels assuming a Gaussian distribution.
+
+    title : str, optional
+        Title used in printed output to identify the context (e.g., detector combination used).
+
+    grid_size : int, optional
+        Resolution of the 2D grid for evaluating the KDE over RA and Dec space.
+
+    Returns
+    -------
+    None
+        Prints a summary table showing the sky area (in square degrees) and the fractional sky coverage
+        corresponding to each sigma level contour.
+    """
+    # Create evenly weighted samples
+    # Extract samples and weights from Dynesty results    
+    samples = results.samples
+    weights = results.importance_weights()
+    weights /= np.sum(weights)
+    # Resample for equal-weight posterior 
+    equal_samples = resample_equal(samples, weights)
+
+    ra_samples = equal_samples[:, 0]
+    dec_samples = equal_samples[:, 1]
+    dl_samples = equal_samples[:, 4]
+    data = np.vstack([ra_samples, dec_samples])
+    
+    ## ======= 2D KDE Confidence Contour =======
+    
+    # Calculate the Gaussian KDE distribution
+    kde = gaussian_kde(data)
+
+    # Create a grid for the KDE to be evaluated on
+    x = np.linspace(ra_samples.min(), ra_samples.max(), grid_size)
+    y = np.linspace(dec_samples.min(), dec_samples.max(), grid_size)
+    X, Y = np.meshgrid(x, y)
+
+    # Evaluate the KDE on the grid
+    positions = np.vstack([X.ravel(), Y.ravel()])
+    kde_grid_values = kde(positions).reshape(X.shape).flatten()
+
+    # Calculate the contour level for the specified confidence level
+    kde_sorted = np.sort(kde_grid_values)[::-1]
+    # Normalize the KDE values
+    kde_cumsum = np.cumsum(kde_sorted)
+    kde_cumsum /= kde_cumsum[-1]
+
+    # Convert sigma levels to confidence levels ie 1 sigma = 68.27% confidence level
+    confidence_levels = [norm.cdf(sigma) - norm.cdf(-sigma) for sigma in sigma_levels]
+
+    # Get density thresholds
+    threshold_idxs = [np.searchsorted(kde_cumsum, cl) for cl in confidence_levels]
+    density_thresholds = [kde_sorted[idx] for idx in threshold_idxs]
+
+    # === Healpy Area Comparison ===
+    nside = 64
+    pixel_area = hp.nside2pixarea(nside, degrees=True)
+    npix = hp.nside2npix(nside)
+    theta, phi = hp.pix2ang(nside, np.arange(npix), lonlat=False)
+
+    kde_values = np.zeros(npix)
+    for i in range(npix):
+        ra, dec = phi[i], 0.5 * np.pi - theta[i]
+        if (ra_samples.min() <= ra <= ra_samples.max()) and (dec_samples.min() <= dec <= dec_samples.max()):
+            kde_values[i] = kde(np.array([[ra], [dec]]))[0]
+
+        else:
+            kde_values[i] = 0
+
+    total_sky_area = 4 * np.pi * (180 / np.pi) ** 2
+
+    # Count pixels above threshold
+    rows = []
+    for sigma, threshold in zip(sigma_levels, density_thresholds):
+        mask = kde_values >= threshold
+        area = np.sum(mask) * pixel_area
+        fraction = area / total_sky_area
+        rows.append({"σ": f"{sigma}σ", "Area [deg²]": area, "Fraction of Sky": fraction})
+
+    df = pd.DataFrame(rows)
+
+    print(f"\nSky areas covered for different sigma confidence levels in '{title}':")
+    print(df.to_string(index=False, formatters={
+        "Area [deg²]": "{:.2f}".format,
+        "Fraction of Sky": "{:.4f}".format
+    }))
+
+    return None
+
+
+def plot_Hubble_marginal(samples_1, samples_2, redshift, colors=['red', 'blue'], labels=['H1 and L1', 'H1, L1 and V1']):
+    """
+    Plot the inferred Hubble constant from two posterior sample sets and a common redshift.
+
+    Parameters
+    ----------
+    samples_1 : ndarray
+        Posterior samples array for the first detector combination. Should have luminosity distance in column 4 (in Gpc).
+    samples_2 : ndarray
+        Posterior samples array for the second detector combination. Same format as samples_1.
+    redshift : float
+        Redshift of the host galaxy.
+    colors : list of str, optional
+        Colors to use for the two plots. Default is ['red', 'blue'].
+    labels : list of str, optional
+        Labels for the legend. Default is ['H1 and L1', 'H1, L1 and V1'].
+    """
+
+    speed_of_light = 299792.458  # km/s
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    i = 0
+    for samples, color, label in zip([samples_1, samples_2], colors, labels):
+        i += 1
+        dl_samples = samples[:, 4] * 1000  # Convert Gpc to Mpc
+        z = np.full(dl_samples.shape, redshift)
+
+        # Compute Hubble constant samples
+        hubble_values = speed_of_light * z / dl_samples
+
+        # KDE and histogram
+        kde = gaussian_kde(hubble_values)
+        x = np.linspace(hubble_values.min(), hubble_values.max(), 500)
+        y = kde(x)
+        y /= np.trapezoid(y, x)  # Normalize
+
+        ax.plot(x, y, color=color, label=label)
+        ax.hist(hubble_values, bins=40, density=True, alpha=0.2, edgecolor='none', color=color)
+
+        # Median and 68% interval
+        median = np.median(hubble_values)
+        lower = np.percentile(hubble_values, 16)
+        upper = np.percentile(hubble_values, 84)
+        ax.axvline(median, color=color, linestyle='-', linewidth=1)
+        ax.axvline(lower, color=color, linestyle='--', linewidth=1)
+        ax.axvline(upper, color=color, linestyle='--', linewidth=1)
+        if i == 1:
+            ax.axvspan(lower, upper, color=color, alpha=0.1, hatch='///', edgecolor=color)
+        else:
+            ax.axvspan(lower, upper, color=color, alpha=0.1, hatch='\\\\', edgecolor=color)
+
+        # Add annotated textbox
+        textstr = f"{label}\nMedian: {median:.2f} km/s/Mpc\n68% CI: +{median-lower:.2f}–{upper-median:.2f}"
+        ax.text(0.98, 0.95 - 0.15 * labels.index(label), textstr,
+                transform=ax.transAxes, fontsize=9, color=color,
+                verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+    ax.set_xlabel(r"Hubble Constant $H_0$ [km s$^{-1}$ Mpc$^{-1}$]", fontsize=12)
+    ax.set_ylabel("Probability Density", fontsize=12)
+    ax.grid(True, linestyle='--', alpha=0.6)
+    ax.tick_params(direction='in')
+    ax.set_xlim(np.percentile(hubble_values, 0), np.percentile(hubble_values, 100))
     plt.tight_layout()
     plt.show()
