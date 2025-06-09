@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import bilby
 import warnings
+from matplotlib.colors import Normalize
 warnings.filterwarnings("ignore", "Wswiglal-redir-stdio")
 import lal
 
@@ -601,3 +602,62 @@ def plot_confidence_map_wilkes(log_likelihood, n_ra=100, n_dec=50):
     # Title and layout
     plt.tight_layout()
 
+
+
+def display_antenna_response(gps_start_time, psi=0):
+    """
+    Plot the antenna response function sqrt(F_+^2 + F_x^2) for H1, L1, and V1
+    at a given GPS time on a side-by-side Mollweide projection.
+    Only the leftmost plot has a Declination label; plots are closely spaced.
+    """
+
+    detectors = ['H1', 'L1', 'V1']
+    interferometers = [bilby.gw.detector.InterferometerList([d])[0] for d in detectors]
+
+    # Sky grid
+    n = 300
+    ra = np.linspace(0, 2 * np.pi, n)
+    dec = np.linspace(-np.pi / 2, np.pi / 2, n)
+    RA, DEC = np.meshgrid(ra, dec)
+    ra_flat = RA.flatten()
+    dec_flat = DEC.flatten()
+
+    RA_shifted = ((RA + np.pi) % (2 * np.pi)) - np.pi
+    RA_shifted = np.roll(RA_shifted, shift=RA.shape[1] // 2, axis=1)
+
+    fig, axs = plt.subplots(1, 3, figsize=(16, 5), subplot_kw={'projection': 'mollweide'}, constrained_layout=True)
+
+    vmax = 0
+    F_all = []
+
+    for i, interferometer in enumerate(interferometers):
+        F_plus = np.array([
+            interferometer.antenna_response(ra, dec, psi, gps_start_time, mode='plus')
+            for ra, dec in zip(ra_flat, dec_flat)
+        ])
+        F_cross = np.array([
+            interferometer.antenna_response(ra, dec, psi, gps_start_time, mode='cross')
+            for ra, dec in zip(ra_flat, dec_flat)
+        ])
+        F_total = np.sqrt(F_plus**2 + F_cross**2).reshape(RA.shape)
+        F_total = np.roll(F_total, shift=RA.shape[1] // 2, axis=1)
+        vmax = max(vmax, F_total.max())
+        F_all.append(F_total)
+
+    norm = Normalize(vmin=0, vmax=vmax)
+
+    for i, (ax, F, label) in enumerate(zip(axs, F_all, detectors)):
+        im = ax.pcolormesh(RA_shifted, DEC, F, cmap='viridis', shading='auto', norm=norm)
+        ax.set_title(f"{label} Antenna Response\n$\\psi = {psi}$", fontsize=13)
+        ax.grid(True)
+        ax.set_xlabel("Right Ascension")
+        if i == 0:
+            ax.set_ylabel("Declination")
+        else:
+            ax.set_yticklabels([])  # Hide Dec labels for all but leftmost
+
+    # Add shared colorbar
+    cbar = fig.colorbar(im, ax=axs, orientation='vertical', pad=0.02, aspect=10, shrink=0.6)
+    cbar.set_label(r"Antenna Response $\sqrt{F_+^2 + F_\times^2}$", fontsize=10)
+
+    plt.show()
