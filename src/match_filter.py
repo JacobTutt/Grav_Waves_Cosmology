@@ -146,6 +146,7 @@ def optimise_matched_filter(detector, detector_strain, detector_psd, waveform, s
                 if snr > max_snr:
                     max_snr = snr
                     best_params = injection_parameters
+                    best_time = time_at_max_snr 
 
     
 
